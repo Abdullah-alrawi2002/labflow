@@ -45,13 +45,14 @@ def log_audit(
     old_value: dict = None,
     new_value: dict = None,
     change_summary: str = None,
-    reason: str = None
+    reason: str = None,
+    field_changed: str = None
 ):
-    """Create an audit log entry."""
+    """Create an audit log entry with 21 CFR Part 11 compliance."""
     # Create checksum for integrity
     content = f"{project_id}{action}{entity_type}{entity_id}{datetime.utcnow().isoformat()}"
     checksum = hashlib.sha256(content.encode()).hexdigest()
-    
+
     audit = models.AuditLog(
         project_id=project_id,
         action=action,
@@ -63,6 +64,7 @@ def log_audit(
         old_value=old_value,
         new_value=new_value,
         change_summary=change_summary,
+        field_changed=field_changed,
         checksum=checksum,
         reason=reason
     )
@@ -155,13 +157,23 @@ def get_experiment(exp_id: int, db: Session = Depends(get_db)):
 
 @app.put("/api/experiments/{exp_id}", response_model=schemas.ExperimentResponse)
 def update_experiment(exp_id: int, update: schemas.ExperimentUpdate, db: Session = Depends(get_db)):
+    """
+    Update experiment with mandatory change reason (21 CFR Part 11 compliance)
+    """
     exp = db.query(models.Experiment).filter(models.Experiment.id == exp_id).first()
     if not exp:
         raise HTTPException(status_code=404, detail="Experiment not found")
-    
+
     if exp.signed:
         raise HTTPException(status_code=400, detail="Cannot modify signed experiment")
-    
+
+    # V2.0: Mandatory change reason enforcement for 21 CFR Part 11 compliance
+    if not update.change_reason or not update.change_reason.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Change reason is mandatory for data integrity (21 CFR Part 11 compliance)"
+        )
+
     # Create version snapshot before update
     version = models.ExperimentVersion(
         experiment_id=exp.id,
@@ -174,20 +186,27 @@ def update_experiment(exp_id: int, update: schemas.ExperimentUpdate, db: Session
         change_reason=update.change_reason
     )
     db.add(version)
-    
-    # Update experiment
+
+    # Update experiment and track field changes
     old_data = {"name": exp.name, "data_rows": len(exp.data or [])}
-    
+    changed_fields = []
+
     for key, value in update.model_dump(exclude_unset=True, exclude={"change_reason"}).items():
-        setattr(exp, key, value)
-    
+        if hasattr(exp, key) and getattr(exp, key) != value:
+            changed_fields.append(key)
+            setattr(exp, key, value)
+
     exp.version += 1
     exp.updated_at = datetime.utcnow()
-    
-    log_audit(db, exp.project_id, "update", "experiment", exp.id, exp.name,
-              old_value=old_data, change_summary=f"Updated to version {exp.version}",
-              reason=update.change_reason)
-    
+
+    # Enhanced audit logging with field tracking
+    for field in changed_fields:
+        log_audit(db, exp.project_id, "update", "experiment", exp.id, exp.name,
+                  old_value=old_data,
+                  change_summary=f"Updated {field} in version {exp.version}",
+                  reason=update.change_reason,
+                  field_changed=field)
+
     db.commit()
     db.refresh(exp)
     return exp
@@ -779,6 +798,262 @@ def remove_equipment(equipment_id: int, db: Session = Depends(get_db)):
     db.delete(equipment)
     db.commit()
     return {"message": "Removed"}
+
+
+# ==================== LITERATURE / PAPERS V2.0 ====================
+
+@app.post("/api/projects/{project_id}/literature", response_model=schemas.PaperResponse)
+async def create_literature(project_id: int, paper: schemas.PaperCreate, db: Session = Depends(get_db)):
+    """Create new literature entry with optional PDF path."""
+    project = db.query(models.Project).filter(models.Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    new_paper = models.Paper(
+        project_id=project_id,
+        **paper.model_dump()
+    )
+    db.add(new_paper)
+    db.commit()
+    db.refresh(new_paper)
+
+    # Asynchronously fetch Scite metrics if DOI is provided
+    if new_paper.doi:
+        from literature_service import literature_service
+        metrics = await literature_service.fetch_scite_metrics(new_paper.doi)
+        new_paper.scite_support_score = metrics.get("support_score")
+        new_paper.scite_contradiction_score = metrics.get("contradiction_score")
+        db.commit()
+        db.refresh(new_paper)
+
+    log_audit(db, project_id, "create", "literature", new_paper.id, new_paper.title)
+
+    return new_paper
+
+
+@app.put("/api/literature/{paper_id}", response_model=schemas.PaperResponse)
+async def update_literature(paper_id: int, update: schemas.PaperUpdate, db: Session = Depends(get_db)):
+    """Update literature entry (used by Literature Context Service)."""
+    paper = db.query(models.Paper).filter(models.Paper.id == paper_id).first()
+    if not paper:
+        raise HTTPException(status_code=404, detail="Literature not found")
+
+    for key, value in update.model_dump(exclude_unset=True).items():
+        setattr(paper, key, value)
+
+    db.commit()
+    db.refresh(paper)
+
+    log_audit(db, paper.project_id, "update", "literature", paper.id, paper.title)
+
+    return paper
+
+
+@app.post("/api/literature/{paper_id}/refresh-metrics")
+async def refresh_literature_metrics(paper_id: int, db: Session = Depends(get_db)):
+    """Manually refresh Scite metrics and check for internal contradictions."""
+    paper = db.query(models.Paper).filter(models.Paper.id == paper_id).first()
+    if not paper:
+        raise HTTPException(status_code=404, detail="Literature not found")
+
+    from literature_service import literature_service
+
+    # Fetch Scite metrics
+    if paper.doi:
+        metrics = await literature_service.fetch_scite_metrics(paper.doi)
+        paper.scite_support_score = metrics.get("support_score")
+        paper.scite_contradiction_score = metrics.get("contradiction_score")
+
+    # Check internal contradictions
+    paper_data = {
+        "key_findings": paper.key_findings,
+        "extracted_methods": paper.extracted_methods
+    }
+    contradiction = await literature_service.check_internal_contradictions(
+        paper.id,
+        paper_data,
+        db
+    )
+    paper.contradiction_alert = contradiction
+
+    db.commit()
+    db.refresh(paper)
+
+    return {
+        "paper_id": paper.id,
+        "scite_support_score": paper.scite_support_score,
+        "scite_contradiction_score": paper.scite_contradiction_score,
+        "contradiction_alert": paper.contradiction_alert
+    }
+
+
+@app.get("/api/projects/{project_id}/literature", response_model=List[schemas.PaperResponse])
+def get_project_literature(project_id: int, db: Session = Depends(get_db)):
+    """Get all literature for a project."""
+    papers = db.query(models.Paper).filter(models.Paper.project_id == project_id).all()
+    return papers
+
+
+@app.get("/api/literature/{paper_id}", response_model=schemas.PaperResponse)
+def get_literature(paper_id: int, db: Session = Depends(get_db)):
+    """Get single literature entry with all metadata."""
+    paper = db.query(models.Paper).filter(models.Paper.id == paper_id).first()
+    if not paper:
+        raise HTTPException(status_code=404, detail="Literature not found")
+    return paper
+
+
+# ==================== ANNOTATIONS ====================
+
+@app.post("/api/literature/{paper_id}/annotations", response_model=schemas.AnnotationResponse)
+def create_annotation(paper_id: int, annotation: schemas.AnnotationCreate, db: Session = Depends(get_db)):
+    """Create new annotation linking paper snippet to internal entity."""
+    paper = db.query(models.Paper).filter(models.Paper.id == paper_id).first()
+    if not paper:
+        raise HTTPException(status_code=404, detail="Literature not found")
+
+    # Validate linked entity exists if provided
+    if annotation.linked_entity_id and annotation.linked_entity_type:
+        if annotation.linked_entity_type == "experiment":
+            entity = db.query(models.Experiment).filter(
+                models.Experiment.id == annotation.linked_entity_id
+            ).first()
+        elif annotation.linked_entity_type == "protocol":
+            entity = db.query(models.Protocol).filter(
+                models.Protocol.id == annotation.linked_entity_id
+            ).first()
+        else:
+            entity = None
+
+        if not entity:
+            raise HTTPException(status_code=404, detail=f"Linked {annotation.linked_entity_type} not found")
+
+    new_annotation = models.Annotation(
+        paper_id=paper_id,
+        **annotation.model_dump()
+    )
+    db.add(new_annotation)
+    db.commit()
+    db.refresh(new_annotation)
+
+    return new_annotation
+
+
+@app.get("/api/literature/{paper_id}/annotations", response_model=List[schemas.AnnotationResponse])
+def get_paper_annotations(paper_id: int, db: Session = Depends(get_db)):
+    """Get all annotations for a paper (shows internal usage)."""
+    annotations = db.query(models.Annotation).filter(
+        models.Annotation.paper_id == paper_id
+    ).all()
+    return annotations
+
+
+@app.get("/api/experiments/{exp_id}/annotations", response_model=List[schemas.AnnotationResponse])
+def get_experiment_annotations(exp_id: int, db: Session = Depends(get_db)):
+    """Get all literature annotations linked to this experiment."""
+    annotations = db.query(models.Annotation).filter(
+        models.Annotation.linked_entity_type == "experiment",
+        models.Annotation.linked_entity_id == exp_id
+    ).all()
+    return annotations
+
+
+@app.delete("/api/annotations/{annotation_id}")
+def delete_annotation(annotation_id: int, db: Session = Depends(get_db)):
+    """Delete an annotation."""
+    annotation = db.query(models.Annotation).filter(models.Annotation.id == annotation_id).first()
+    if not annotation:
+        raise HTTPException(status_code=404, detail="Annotation not found")
+
+    db.delete(annotation)
+    db.commit()
+    return {"message": "Annotation deleted"}
+
+
+# ==================== AI WRITING SERVICE ====================
+
+@app.post("/api/generate-manuscript", response_model=schemas.ManuscriptGenerationResponse)
+async def generate_manuscript(request: schemas.ManuscriptGenerationRequest, db: Session = Depends(get_db)):
+    """Generate manuscript draft (Methods and/or Results sections)."""
+    from writing_service import writing_service
+
+    # Fetch experiments
+    experiments = db.query(models.Experiment).filter(
+        models.Experiment.id.in_(request.experiment_ids)
+    ).all()
+
+    if not experiments:
+        raise HTTPException(status_code=404, detail="No experiments found")
+
+    # Convert to dictionaries
+    exp_dicts = [
+        {
+            "name": exp.name,
+            "parameters": exp.parameters,
+            "data": exp.data,
+            "result": exp.result,
+            "status": exp.status,
+            "success": exp.success
+        }
+        for exp in experiments
+    ]
+
+    content = ""
+    section_name = request.section
+
+    if request.section in ["methods", "both"]:
+        # Fetch protocols
+        protocol_ids = [exp.protocol_id for exp in experiments if exp.protocol_id]
+        protocols = db.query(models.Protocol).filter(
+            models.Protocol.id.in_(protocol_ids)
+        ).all() if protocol_ids else []
+
+        protocol_dicts = [
+            {
+                "name": p.name,
+                "description": p.description,
+                "category": p.category,
+                "steps": p.steps,
+                "required_materials": p.required_materials,
+                "required_equipment": p.required_equipment
+            }
+            for p in protocols
+        ]
+
+        methods_content = await writing_service.generate_methods_section(
+            exp_dicts,
+            protocol_dicts,
+            request.tone
+        )
+        content += f"## Methods\n\n{methods_content}\n\n"
+
+    if request.section in ["results", "both"]:
+        # Fetch analysis data (mock for now - could integrate actual analysis)
+        analyses = []
+        for exp in experiments:
+            if exp.data:
+                analyses.append({
+                    "experiment": exp.name,
+                    "sample_size": len(exp.data),
+                    "status": exp.status
+                })
+
+        results_content = await writing_service.generate_results_section(
+            exp_dicts,
+            analyses,
+            request.tone
+        )
+        content += f"## Results\n\n{results_content}\n\n"
+
+    # Count words
+    word_count = len(content.split())
+
+    return schemas.ManuscriptGenerationResponse(
+        section=section_name,
+        content=content,
+        word_count=word_count,
+        generated_at=datetime.utcnow()
+    )
 
 
 # ==================== FILE UPLOAD ====================

@@ -257,7 +257,7 @@ class SuggestionResponse(BaseModel):
         from_attributes = True
 
 
-# ==================== PAPER ====================
+# ==================== PAPER / LITERATURE ====================
 
 class PaperResponse(BaseModel):
     id: int
@@ -276,6 +276,46 @@ class PaperResponse(BaseModel):
     verified: bool = False
     extracted_methods: List[Dict[str, Any]] = []
     key_findings: List[str] = []
+    scite_support_score: Optional[float] = None
+    scite_contradiction_score: Optional[float] = None
+    contradiction_alert: bool = False
+    full_text_pdf_path: Optional[str] = None
+    created_at: datetime
+    class Config:
+        from_attributes = True
+
+class PaperCreate(BaseModel):
+    title: str
+    doi: Optional[str] = None
+    url: Optional[str] = None
+    description: Optional[str] = None
+    authors: Optional[List[str]] = []
+    full_text_pdf_path: Optional[str] = None
+
+class PaperUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    scite_support_score: Optional[float] = None
+    scite_contradiction_score: Optional[float] = None
+    contradiction_alert: Optional[bool] = None
+    full_text_pdf_path: Optional[str] = None
+
+
+# ==================== ANNOTATION ====================
+
+class AnnotationCreate(BaseModel):
+    snippet_text: str
+    user_name: str
+    linked_entity_type: Optional[str] = None  # 'experiment', 'protocol', 'project'
+    linked_entity_id: Optional[int] = None
+
+class AnnotationResponse(BaseModel):
+    id: int
+    paper_id: int
+    user_name: str
+    snippet_text: str
+    linked_entity_type: Optional[str] = None
+    linked_entity_id: Optional[int] = None
     created_at: datetime
     class Config:
         from_attributes = True
@@ -392,3 +432,18 @@ class ExportRequest(BaseModel):
     include_charts: bool = True
     include_audit_trail: bool = False
     experiments: Optional[List[int]] = None  # Specific experiment IDs, or all if None
+
+
+# ==================== AI WRITING SERVICE ====================
+
+class ManuscriptGenerationRequest(BaseModel):
+    project_id: int
+    experiment_ids: List[int]
+    section: str  # 'methods', 'results', 'both'
+    tone: Optional[str] = "academic"  # academic, concise, detailed
+
+class ManuscriptGenerationResponse(BaseModel):
+    section: str
+    content: str
+    word_count: int
+    generated_at: datetime
