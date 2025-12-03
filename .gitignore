@@ -1,0 +1,13 @@
+# Node and Python artifacts
+node_modules/
+*.log
+__pycache__/
+*.pyc
+
+# Env files
+.env
+backend/.env
+
+# Build outputs
+frontend/dist/
+.cache/
