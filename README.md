@@ -1,4 +1,4 @@
-# Lab Research Management System
+# Lab Research Management System (https://labmind.webflow.io/)
 
 A modern lab research management application with AI-powered insights and advanced academic paper search.
 
