@@ -6,7 +6,7 @@ All Core Features: Version Control, Audit Trail, Protocols, Comments, Digital Si
 from fastapi import FastAPI, HTTPException, Depends, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from datetime import datetime
 import hashlib
 import json
@@ -637,6 +637,198 @@ async def analyze_project(project_id: int, db: Session = Depends(get_db)):
     
     db.commit()
     return results
+
+
+@app.post("/api/projects/{project_id}/analyze-patterns")
+async def analyze_project_patterns(project_id: int, db: Session = Depends(get_db)):
+    """
+    Feature A: Pattern Detection
+    Analyzes experiment data to identify non-obvious patterns and correlations.
+    """
+    from ai_services import analyze_pattern_detection
+
+    project = db.query(models.Project).filter(models.Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    experiments = [
+        {
+            "id": exp.id,
+            "name": exp.name,
+            "parameters": exp.parameters or [],
+            "data": exp.data or [],
+            "result": exp.result,
+            "status": exp.status,
+            "success": exp.success,
+            "created_at": exp.created_at.isoformat() if exp.created_at else None
+        }
+        for exp in project.experiments if exp.is_latest
+    ]
+
+    if not experiments:
+        raise HTTPException(status_code=400, detail="No experiments found for pattern analysis")
+
+    try:
+        result = await analyze_pattern_detection(experiments)
+
+        # Store patterns as insights
+        if "patterns" in result and result["patterns"]:
+            for pattern_obj in result["patterns"]:
+                pattern_text = pattern_obj.get("pattern", "")
+                if pattern_text:
+                    db.add(models.Insight(
+                        project_id=project_id,
+                        content=pattern_text,
+                        insight_type="pattern",
+                        confidence=pattern_obj.get("confidence", 0.0),
+                        related_experiments=[
+                            int(exp_id.replace("EXP-", ""))
+                            for exp_id in pattern_obj.get("experiments", [])
+                            if exp_id.startswith("EXP-")
+                        ]
+                    ))
+
+        log_audit(db, project_id, "analyze_patterns", "project", project_id, project.name,
+                  change_summary=f"Pattern detection analysis completed")
+        db.commit()
+
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Pattern analysis failed: {str(e)}")
+
+
+@app.post("/api/projects/{project_id}/optimize")
+async def optimize_project_parameters(
+    project_id: int,
+    goal_metric: str = "efficiency",
+    constraints: Optional[Dict[str, Any]] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Feature B: Optimization Suggestions
+    Suggests new parameter configurations to optimize a specific metric.
+    """
+    from ai_services import generate_optimization_suggestions
+
+    project = db.query(models.Project).filter(models.Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    experiments = [
+        {
+            "id": exp.id,
+            "name": exp.name,
+            "parameters": exp.parameters or [],
+            "data": exp.data or [],
+            "result": exp.result,
+            "status": exp.status,
+            "success": exp.success,
+            "created_at": exp.created_at.isoformat() if exp.created_at else None
+        }
+        for exp in project.experiments if exp.is_latest
+    ]
+
+    if not experiments:
+        raise HTTPException(status_code=400, detail="No experiments found for optimization")
+
+    try:
+        result = await generate_optimization_suggestions(experiments, goal_metric, constraints)
+
+        # Store optimization suggestions
+        if "suggestions" in result and result["suggestions"]:
+            for sugg_obj in result["suggestions"]:
+                db.add(models.Suggestion(
+                    project_id=project_id,
+                    title=f"Optimize {goal_metric}",
+                    description=sugg_obj.get("reasoning", ""),
+                    suggestion_type="optimization",
+                    priority="high" if sugg_obj.get("approved", False) else "medium"
+                ))
+
+        log_audit(db, project_id, "optimize", "project", project_id, project.name,
+                  change_summary=f"Optimization analysis for {goal_metric} completed")
+        db.commit()
+
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Optimization failed: {str(e)}")
+
+
+@app.post("/api/experiments/{exp_id}/analyze-failure")
+async def analyze_experiment_failure(
+    exp_id: int,
+    baseline_exp_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Feature C: Failure Analysis
+    Diagnoses why an experiment failed using the 5 Whys framework.
+    """
+    from ai_services import analyze_failure_root_cause
+
+    failed_exp = db.query(models.Experiment).filter(models.Experiment.id == exp_id).first()
+    if not failed_exp:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    if failed_exp.status != "failed" and failed_exp.success is not False:
+        raise HTTPException(status_code=400, detail="This experiment is not marked as failed")
+
+    failed_data = {
+        "id": failed_exp.id,
+        "name": failed_exp.name,
+        "parameters": failed_exp.parameters or [],
+        "data": failed_exp.data or [],
+        "result": failed_exp.result,
+        "status": failed_exp.status,
+        "success": failed_exp.success,
+        "failure_reason": failed_exp.failure_reason,
+        "failure_category": failed_exp.failure_category,
+        "created_at": failed_exp.created_at.isoformat() if failed_exp.created_at else None
+    }
+
+    baseline_data = None
+    if baseline_exp_id:
+        baseline_exp = db.query(models.Experiment).filter(models.Experiment.id == baseline_exp_id).first()
+        if baseline_exp:
+            baseline_data = {
+                "id": baseline_exp.id,
+                "name": baseline_exp.name,
+                "parameters": baseline_exp.parameters or [],
+                "data": baseline_exp.data or [],
+                "result": baseline_exp.result,
+                "status": baseline_exp.status,
+                "success": baseline_exp.success,
+                "created_at": baseline_exp.created_at.isoformat() if baseline_exp.created_at else None
+            }
+
+    # Get equipment maintenance logs (if available)
+    maintenance_logs = None
+    # TODO: Implement equipment maintenance log retrieval if needed
+
+    try:
+        result = await analyze_failure_root_cause(failed_data, baseline_data, maintenance_logs)
+
+        # Update experiment with root cause analysis if not already present
+        if not failed_exp.failure_reason and result.get("root_cause"):
+            failed_exp.failure_reason = result.get("root_cause")
+
+        # Store as an insight
+        if result.get("incident_report"):
+            db.add(models.Insight(
+                project_id=failed_exp.project_id,
+                content=result.get("incident_report", ""),
+                insight_type="failure_analysis",
+                confidence=0.9,
+                related_experiments=[failed_exp.id]
+            ))
+
+        log_audit(db, failed_exp.project_id, "analyze_failure", "experiment", exp_id, failed_exp.name,
+                  change_summary=f"Failure root cause analysis completed")
+        db.commit()
+
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failure analysis failed: {str(e)}")
 
 
 # ==================== EXPERIMENT ANALYSIS ====================

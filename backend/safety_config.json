@@ -1,0 +1,42 @@
+{
+  "temperature_c": {
+    "min": -273,
+    "max": 1200,
+    "description": "Temperature in Celsius. Absolute minimum is -273°C, maximum safe operational limit is 1200°C"
+  },
+  "pressure_psi": {
+    "min": 0,
+    "max": 3000,
+    "description": "Pressure in PSI. Must be non-negative, maximum safe operational limit is 3000 PSI"
+  },
+  "ph": {
+    "min": 0,
+    "max": 14,
+    "description": "pH scale ranges from 0 (highly acidic) to 14 (highly basic)"
+  },
+  "voltage_v": {
+    "min": 0,
+    "max": 1000,
+    "description": "Voltage in Volts. Maximum safe operational limit is 1000V"
+  },
+  "concentration_m": {
+    "min": 0,
+    "max": 10,
+    "description": "Molarity (M) concentration. Maximum safe limit is 10M"
+  },
+  "rpm": {
+    "min": 0,
+    "max": 50000,
+    "description": "Rotations per minute for centrifuges or stirrers"
+  },
+  "flow_rate_ml_min": {
+    "min": 0,
+    "max": 10000,
+    "description": "Flow rate in mL/min"
+  },
+  "power_w": {
+    "min": 0,
+    "max": 5000,
+    "description": "Power in Watts"
+  }
+}
