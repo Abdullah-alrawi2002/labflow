@@ -13,6 +13,7 @@ import NewExperimentModal from './NewExperimentModal';
 export default function Dashboard({ project, onRefresh }) {
   const [showNewExp, setShowNewExp] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
+  const stageLabel = (project.stage || 'brainstorm').replace(/\b\w/g, (l) => l.toUpperCase());
 
   const handleAnalyze = async () => {
     setAnalyzing(true);
@@ -41,16 +42,19 @@ export default function Dashboard({ project, onRefresh }) {
   ];
 
   return (
-    <div className="p-8 max-w-[1600px] mx-auto">
+    <div className="p-8 max-w-[1600px] mx-auto bg-gray-50 min-h-screen">
       {/* Header */}
-      <header className="flex items-center justify-between mb-8">
-        <div className="flex-1" />
-        
-        {/* Project Title */}
-        <h1 className="text-2xl font-semibold text-gray-900">{project.name}</h1>
-        
-        {/* Members & Invite */}
-        <div className="flex-1 flex items-center justify-end gap-3">
+      <header className="flex items-center justify-between mb-6">
+        <div>
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-[0.12em]">Home / {stageLabel}</p>
+          <h1 className="text-2xl font-semibold text-gray-900 mt-1">Dashboard</h1>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <div className="text-right">
+            <p className="text-xs text-gray-400">Current project</p>
+            <p className="text-sm font-semibold text-gray-900">{project.name}</p>
+          </div>
           <button className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-700 font-medium">
             <UserPlus className="w-4 h-4" />
             Invite
@@ -74,13 +78,15 @@ export default function Dashboard({ project, onRefresh }) {
       </header>
 
       {/* Stage Progress */}
-      <StageProgress 
-        currentStage={project.stage} 
-        onStageChange={async (stage) => {
-          await api.updateProject(project.id, { stage });
-          onRefresh();
-        }}
-      />
+      <div className="card p-5 shadow-soft mb-8">
+        <StageProgress
+          currentStage={project.stage}
+          onStageChange={async (stage) => {
+            await api.updateProject(project.id, { stage });
+            onRefresh();
+          }}
+        />
+      </div>
 
       {/* Main Grid */}
       <div className="grid grid-cols-12 gap-6 mt-8">

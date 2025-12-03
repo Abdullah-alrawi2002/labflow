@@ -11,12 +11,19 @@ const NAV_ITEMS = [
   { id: 'settings', label: 'Settings', icon: '⚙️' },
 ];
 
-export default function Sidebar({ 
-  currentView, 
-  onViewChange, 
+export default function Sidebar({
+  currentPage,
+  onNavigate,
   labName = 'Research Lab',
-  onNewProject 
+  onNewProject
 }) {
+  const activePage = currentPage;
+
+  const handleNavigate = (page) => {
+    if (onNavigate) {
+      onNavigate(page);
+    }
+  };
   return (
     <div className="w-64 bg-white border-r border-gray-100 flex flex-col h-screen">
       {/* Logo/Lab Name */}
@@ -37,9 +44,9 @@ export default function Sidebar({
         {NAV_ITEMS.map((item) => (
           <button
             key={item.id}
-            onClick={() => onViewChange(item.id)}
+            onClick={() => handleNavigate(item.id)}
             className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-              currentView === item.id
+              activePage === item.id
                 ? 'bg-primary-50 text-primary-700'
                 : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
             }`}
