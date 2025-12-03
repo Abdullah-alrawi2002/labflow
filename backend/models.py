@@ -198,34 +198,35 @@ class AuditLog(Base):
     Comprehensive audit trail for compliance (FDA 21 CFR Part 11, GLP)
     """
     __tablename__ = "audit_logs"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"))
-    
+
     # What happened
     action = Column(String(100), nullable=False)  # create, update, delete, sign, export, view
     entity_type = Column(String(100), nullable=False)  # experiment, protocol, paper, etc.
     entity_id = Column(Integer)
     entity_name = Column(String(255))
-    
+
     # Who did it
     user_name = Column(String(255), nullable=False)
     user_role = Column(String(100))
     user_ip = Column(String(50))
-    
+
     # Details
     old_value = Column(JSON)  # Previous state (for updates)
     new_value = Column(JSON)  # New state (for updates)
     change_summary = Column(Text)  # Human-readable summary
-    
+    field_changed = Column(Text)  # Name of the field being modified (e.g., 'pH', 'concentration')
+
     # Integrity
     timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
     checksum = Column(String(256))  # SHA-256 for tamper detection
-    
-    # Compliance metadata
-    reason = Column(Text)  # Why the change was made
+
+    # Compliance metadata (21 CFR Part 11)
+    reason = Column(Text)  # Why the change was made - MANDATORY for UPDATE/DELETE
     electronic_signature = Column(String(256))
-    
+
     project = relationship("Project", back_populates="audit_logs")
 
 
@@ -293,14 +294,17 @@ class Suggestion(Base):
 
 
 class Paper(Base):
+    """
+    Literature/Paper tracking with knowledge integrity features (Scite-like validation)
+    """
     __tablename__ = "papers"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"))
     title = Column(String(500), nullable=False)
     date = Column(String(50))
     url = Column(String(500))
-    doi = Column(String(100))
+    doi = Column(String(100), unique=True, index=True)  # Unique identifier for Scite lookups
     description = Column(Text)
     source = Column(String(100))
     authors = Column(JSON, default=list)
@@ -309,19 +313,49 @@ class Paper(Base):
     match_reasons = Column(JSON, default=list)
     scores = Column(JSON, default=dict)
     verified = Column(Boolean, default=False)
-    
+
     # Methods extraction
     extracted_methods = Column(JSON, default=list)  # [{title: "PCR Protocol", steps: [...], extracted_at: "..."}]
     key_findings = Column(JSON, default=list)  # AI-extracted key findings
-    
+
     # Citation network
     cites = Column(JSON, default=list)  # Papers this paper cites
     cited_by = Column(JSON, default=list)  # Papers that cite this paper
-    
+
+    # V2.0: Knowledge Integrity (Scite-like validation)
+    scite_support_score = Column(Float, nullable=True)  # Supporting claims count/metric from Scite API
+    scite_contradiction_score = Column(Float, nullable=True)  # Contrasting claims count/metric from Scite API
+    contradiction_alert = Column(Boolean, default=False)  # Internal flag for variance with LabFlow experiments
+    full_text_pdf_path = Column(String(500), nullable=True)  # Local/S3 path to stored PDF for in-platform viewing
+
     created_at = Column(DateTime, default=datetime.utcnow)
-    
+
     project = relationship("Project", back_populates="papers")
     extracted_protocols = relationship("Protocol", back_populates="source_paper")
+    annotations = relationship("Annotation", back_populates="paper", cascade="all, delete-orphan")
+
+
+class Annotation(Base):
+    """
+    Literature annotations linking paper snippets to internal experiments/protocols (Liner-like)
+    """
+    __tablename__ = "annotations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, nullable=True)  # Future: link to user authentication
+    user_name = Column(String(255))  # For now, store username directly
+    paper_id = Column(Integer, ForeignKey("papers.id", ondelete="CASCADE"))
+
+    # Highlighted snippet
+    snippet_text = Column(Text, nullable=False)  # The highlighted text from the PDF
+
+    # Link to internal entities
+    linked_entity_type = Column(String(100), nullable=True)  # 'experiment', 'protocol', 'project'
+    linked_entity_id = Column(Integer, nullable=True)  # The ID of the linked object
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    paper = relationship("Paper", back_populates="annotations")
 
 
 class Member(Base):
